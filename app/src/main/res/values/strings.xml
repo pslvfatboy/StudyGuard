@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">StudyGuard</string>
+    <string name="device_admin_description">Lets StudyGuard protect itself from being uninstalled without the parent PIN.</string>
+    <string name="accessibility_service_description">Lets StudyGuard notice when someone opens the uninstall or "Deactivate device admin" screen for this app, so it can ask for the parent PIN.</string>
+</resources>
