@@ -17,18 +17,19 @@ import java.util.concurrent.Executors
 
 /**
  * One-time setup screen. Walks through:
- *  1. Setting the parent PIN.
- *  2. Entering the GitHub raw URL for the blocklist.
- *  3. Granting Device Admin (uninstall deterrent).
- *  4. Granting Usage Access (needed to detect the foreground app).
- *  5. Granting the Accessibility Service (uninstall PIN guard).
- *  6. Granting "draw over other apps" (needed for some OEMs to show the PIN screen promptly).
- *  7. Starting the background service.
+ *  1. Setting the parent PIN + blocklist URL.
+ *  2. Granting Device Admin (uninstall deterrent).
+ *  3. Granting the Accessibility Service (this is what actually blocks apps, in real time,
+ *     and also guards the uninstall/admin-deactivation screens).
+ *  4. Granting "draw over other apps" (helps the PIN screen appear promptly on some OEMs).
+ *  5. Starting the background service (blocklist refresh + persistent notification).
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var devicePolicyManager: DevicePolicyManager
     private lateinit var adminComponent: ComponentName
+    private lateinit var pinInput: EditText
+    private lateinit var statusText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,24 +38,34 @@ class MainActivity : AppCompatActivity() {
         devicePolicyManager = getSystemService(DevicePolicyManager::class.java)
         adminComponent = ComponentName(this, MyDeviceAdminReceiver::class.java)
 
-        val pinInput = findViewById<EditText>(R.id.setupPinInput)
+        pinInput = findViewById(R.id.setupPinInput)
         val urlInput = findViewById<EditText>(R.id.setupUrlInput)
-        val statusText = findViewById<TextView>(R.id.statusText)
+        statusText = findViewById(R.id.statusText)
 
         Prefs.getBlocklistUrl(this)?.let { urlInput.setText(it) }
+        if (Prefs.hasPin(this)) {
+            pinInput.hint = "PIN already set — leave blank to keep it"
+        }
 
         findViewById<Button>(R.id.saveButton).setOnClickListener {
             val pin = pinInput.text.toString()
             val url = urlInput.text.toString().trim()
-            if (pin.length < 4) {
-                Toast.makeText(this, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
             if (url.isEmpty()) {
                 Toast.makeText(this, "Enter the blocklist URL", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            Prefs.setPin(this, pin)
+            if (pin.isNotEmpty()) {
+                if (pin.length < 4) {
+                    Toast.makeText(this, "PIN must be at least 4 digits", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                Prefs.setPin(this, pin)
+                pinInput.setText("")
+                pinInput.hint = "PIN already set — leave blank to keep it"
+            } else if (!Prefs.hasPin(this)) {
+                Toast.makeText(this, "Enter a PIN (at least 4 digits)", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             Prefs.setBlocklistUrl(this, url)
             Toast.makeText(this, "Saved. Now grant each permission below.", Toast.LENGTH_LONG).show()
         }
@@ -74,11 +85,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        findViewById<Button>(R.id.usageAccessButton).setOnClickListener {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }
-
         findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
+            Toast.makeText(
+                this,
+                "Find StudyGuard in the list and turn it on. If the switch won't turn on, " +
+                    "see 'Restricted settings' in the README.",
+                Toast.LENGTH_LONG
+            ).show()
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
@@ -99,13 +112,46 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Save your PIN and blocklist URL first", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            if (!isAccessibilityServiceEnabled()) {
+                Toast.makeText(
+                    this,
+                    "Accessibility service isn't on yet — blocking won't work without it.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             Executors.newSingleThreadExecutor().execute {
                 BlocklistFetcher.refresh(applicationContext)
             }
             val serviceIntent = Intent(this, AppBlockerService::class.java)
             ContextCompat.startForegroundService(this, serviceIntent)
-            statusText.text = "StudyGuard is running."
             Toast.makeText(this, "StudyGuard started", Toast.LENGTH_SHORT).show()
+            refreshStatus()
         }
+
+        refreshStatus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshStatus()
+    }
+
+    private fun refreshStatus() {
+        val adminOk = devicePolicyManager.isAdminActive(adminComponent)
+        val accessibilityOk = isAccessibilityServiceEnabled()
+        val overlayOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+        fun mark(ok: Boolean) = if (ok) "✅" else "❌"
+        statusText.text = "Device Admin: ${mark(adminOk)}   " +
+            "Accessibility: ${mark(accessibilityOk)}   " +
+            "Overlay: ${mark(overlayOk)}"
+    }
+
+    /** Reads Settings.Secure directly - more reliable than guessing from the Settings UI alone. */
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expected = ComponentName(this, UninstallGuardAccessibilityService::class.java).flattenToString()
+        val enabledServices = Settings.Secure.getString(
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabledServices.split(':').any { it.equals(expected, ignoreCase = true) }
     }
 }

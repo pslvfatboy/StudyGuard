@@ -3,50 +3,43 @@ package com.studyguard.app
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.app.usage.UsageStatsManager
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.Executors
 
 /**
- * Foreground service that:
- *  1. Every ~60s, re-downloads the blocklist from the configured URL.
- *  2. Every ~2s, checks which app is currently in the foreground via UsageStatsManager,
- *     and if it's on the blocklist, sends the device back to the home screen and shows
- *     a visible toast so the child knows why (this is intentionally NOT hidden).
+ * Foreground service whose only job now is to keep re-downloading the blocklist from the
+ * configured URL every ~60s, and to show the persistent "StudyGuard is active" notification
+ * (required for any foreground service, and intentionally visible since this app is disclosed
+ * to the child).
  *
- * Requires the user to have granted "Usage Access" (Settings > Apps > Special access >
- * Usage access) for foreground-app detection to work.
+ * The actual blocking happens in UninstallGuardAccessibilityService, in real time, as soon as
+ * a blocked app's window appears - not here. An earlier version of this service polled the
+ * foreground app itself and tried to send the device home via startActivity(), but Android's
+ * background-activity-start restrictions silently blocked that; the Accessibility Service's
+ * performGlobalAction() is exempt from that restriction, which is why blocking moved there.
  */
 class AppBlockerService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private val bgExecutor = Executors.newSingleThreadExecutor()
-
-    private var lastBlocklistFetch = 0L
     private val blocklistIntervalMs = 60_000L
-    private val pollIntervalMs = 2_000L
 
-    private var lastBlockedPackage: String? = null
-
-    private val loop = object : Runnable {
+    private val refreshLoop = object : Runnable {
         override fun run() {
-            checkForegroundApp()
-            maybeRefreshBlocklist()
-            handler.postDelayed(this, pollIntervalMs)
+            bgExecutor.execute { BlocklistFetcher.refresh(applicationContext) }
+            handler.postDelayed(this, blocklistIntervalMs)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         startAsForeground()
-        handler.post(loop)
+        handler.post(refreshLoop)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -56,66 +49,8 @@ class AppBlockerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        handler.removeCallbacks(loop)
+        handler.removeCallbacks(refreshLoop)
         super.onDestroy()
-    }
-
-    private fun maybeRefreshBlocklist() {
-        val now = System.currentTimeMillis()
-        if (now - lastBlocklistFetch >= blocklistIntervalMs) {
-            lastBlocklistFetch = now
-            bgExecutor.execute { BlocklistFetcher.refresh(applicationContext) }
-        }
-    }
-
-    private fun checkForegroundApp() {
-        val foregroundPkg = getForegroundPackage() ?: return
-        if (foregroundPkg == packageName) return // never block ourselves
-
-        val blocked = Prefs.getBlockedApps(applicationContext)
-        if (foregroundPkg in blocked) {
-            if (foregroundPkg != lastBlockedPackage) {
-                lastBlockedPackage = foregroundPkg
-                showBlockedToast(foregroundPkg)
-            }
-            goHome()
-        } else {
-            lastBlockedPackage = null
-        }
-    }
-
-    private fun getForegroundPackage(): String? {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val end = System.currentTimeMillis()
-        val begin = end - 10_000 // look at the last 10 seconds of events
-        val events = usm.queryEvents(begin, end)
-        var lastPkg: String? = null
-        val event = android.app.usage.UsageEvents.Event()
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
-            if (event.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                lastPkg = event.packageName
-            }
-        }
-        return lastPkg
-    }
-
-    private fun goHome() {
-        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_HOME)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        startActivity(homeIntent)
-    }
-
-    private fun showBlockedToast(pkg: String) {
-        handler.post {
-            Toast.makeText(
-                applicationContext,
-                "StudyGuard: that app is blocked right now — time to study! ($pkg)",
-                Toast.LENGTH_LONG
-            ).show()
-        }
     }
 
     private fun startAsForeground() {

@@ -57,29 +57,22 @@
         android:layout_height="wrap_content" />
 
     <Button
-        android:id="@+id/usageAccessButton"
-        android:text="2. Grant Usage Access"
-        android:layout_marginTop="8dp"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
-
-    <Button
         android:id="@+id/accessibilityButton"
-        android:text="3. Enable StudyGuard Accessibility Service"
+        android:text="2. Enable StudyGuard Accessibility Service"
         android:layout_marginTop="8dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
     <Button
         android:id="@+id/overlayButton"
-        android:text="4. Grant 'Draw over other apps'"
+        android:text="3. Grant 'Draw over other apps'"
         android:layout_marginTop="8dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
 
     <Button
         android:id="@+id/startServiceButton"
-        android:text="5. Start StudyGuard"
+        android:text="4. Start StudyGuard"
         android:layout_marginTop="20dp"
         android:layout_width="match_parent"
         android:layout_height="wrap_content" />
